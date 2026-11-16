@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Cache files
+*.cache
+
+# Package files
+*.tgz
+*.zip
+*.tar.gz
+
+# Distribution directories
+publish/
+build/
+
+# Coverage reports
+coverage/
+
+# Testing directories
+test/
+test-results/
+
+# TypeScript build outputs
+*.tsbuildinfo
+
+# Yarn cache
+.yarn/cache
+.yarn/install-state.gz
+
+# Build tools
+vite-debug.log*
+npx
+try-run-server/
+
+# Monaco editor
+codicons.json
+
+# Generated docs
+toc.json
+
+# Essential project files
+README.md
+package.json
+tsconfig.json
+
+# Generated static files
+public/static/
+
+# Application data
+data/
