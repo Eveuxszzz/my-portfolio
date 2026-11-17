@@ -482,11 +482,11 @@ code {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse 40% 48% at 16% 24%, rgba(208, 208, 208, 0.085) 0%, rgba(208, 208, 208, 0.03) 42%, transparent 72%),
-    radial-gradient(ellipse 26% 30% at 72% 12%, rgba(176, 176, 176, 0.07) 0%, transparent 70%),
-    radial-gradient(ellipse 48% 28% at 58% 79%, rgba(196, 196, 196, 0.06) 0%, rgba(196, 196, 196, 0.02) 46%, transparent 74%),
-    radial-gradient(ellipse 23% 34% at 91% 56%, rgba(144, 144, 144, 0.06) 0%, transparent 68%),
-    radial-gradient(ellipse 34% 26% at 6% 84%, rgba(160, 160, 160, 0.05) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 48% at 16% 24%, rgba(208, 208, 208, 0.102) 0%, rgba(208, 208, 208, 0.036) 42%, transparent 72%),
+    radial-gradient(ellipse 26% 30% at 72% 12%, rgba(176, 176, 176, 0.084) 0%, transparent 70%),
+    radial-gradient(ellipse 48% 28% at 58% 79%, rgba(196, 196, 196, 0.072) 0%, rgba(196, 196, 196, 0.024) 46%, transparent 74%),
+    radial-gradient(ellipse 23% 34% at 91% 56%, rgba(144, 144, 144, 0.072) 0%, transparent 68%),
+    radial-gradient(ellipse 34% 26% at 6% 84%, rgba(160, 160, 160, 0.06) 0%, transparent 70%),
     linear-gradient(165deg, #020202 0%, #060606 38%, #0b0b0b 72%, #050505 100%);
 }
 
