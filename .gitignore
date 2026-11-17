@@ -64,10 +64,9 @@ codicons.json
 # Generated docs
 toc.json
 
-# Essential project files
-README.md
-package.json
-tsconfig.json
+# Tooling artifacts
+.impeccable/
+.playwright-mcp/
 
 # Generated static files
 public/static/
