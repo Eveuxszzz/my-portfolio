@@ -472,6 +472,8 @@ code {
   background: transparent; /* let the continuous field behind show through */
   scroll-snap-align: start;
   scroll-snap-stop: always;
+  view-timeline-name: --page-view; /* each card reads its own page's entry → exit */
+  view-timeline-axis: block;
 }
 
 /* One field for the whole deck, driven by the scroller's named timeline so the
@@ -520,7 +522,23 @@ code {
   border-radius: 0.5rem;
   background: rgba(0, 0, 0, 0.55);
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+  --parallax-distance: 60px;
+  animation: card-parallax 1ms linear both;
+  animation-timeline: --page-view; /* after the shorthand: it resets the timeline */
+  animation-range: entry 0% exit 100%;
 }
+
+/* translate composes with the centering transform, so the card drifts at a
+   different rate than its snapping page and sits centered when snapped. */
+@keyframes card-parallax {
+  from { translate: 0 var(--parallax-distance); }
+  to   { translate: 0 calc(var(--parallax-distance) * -1); }
+}
+
+/* First content page gets the deepest depth; later snaps taper off. */
+.snap-page:nth-of-type(2) .snap-placeholder { --parallax-distance: 140px; }
+.snap-page:nth-of-type(3) .snap-placeholder { --parallax-distance: 90px; }
+.snap-page:nth-of-type(4) .snap-placeholder { --parallax-distance: 50px; }
 
 .snap-placeholder__label {
   display: block;
@@ -542,11 +560,16 @@ code {
 @media (prefers-reduced-motion: reduce) {
   .gradient-field, .gradient-field__inner { animation: none; transform: none; }
   .gradient-field { opacity: 0.7; }
+  .snap-placeholder { animation: none; translate: none; }
 }
 
 @supports not (scroll-timeline-name: --deck) {
   .gradient-field, .gradient-field__inner { animation: none; transform: none; }
   .gradient-field { opacity: 0.7; }
+}
+
+@supports not (view-timeline-name: none) {
+  .snap-placeholder { animation: none; translate: none; }
 }
 
 @import 'tailwindcss';
