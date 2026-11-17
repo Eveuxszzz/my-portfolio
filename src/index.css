@@ -436,4 +436,106 @@ code {
   font-weight: 500;
 }
 
+/* Full-viewport scroll-snap deck */
+.app-snap-shell {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-snap-view {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+}
+
+.snap-scroller {
+  flex: 1;
+  width: 100%;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scroll-snap-type: y mandatory;
+  touch-action: pan-y;
+}
+
+.snap-page {
+  position: relative;
+  overflow: clip; /* clip the layer without creating a nested scroll container for view() */
+  min-height: 100%;
+  margin: 0; /* overrides the global `section { margin-bottom: 30px }` */
+  background: #000;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.snap-page__layer {
+  position: absolute;
+  inset: -12% 0; /* oversized so no edge shows while it drifts */
+  pointer-events: none;
+  animation: snap-parallax 1ms linear both;
+  animation-timeline: view(); /* after the shorthand: the shorthand resets the timeline */
+  animation-range: entry 0% exit 100%;
+}
+
+.snap-page:nth-child(1) .snap-page__layer {
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 62%);
+}
+.snap-page:nth-child(2) .snap-page__layer {
+  background: radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0) 62%);
+}
+.snap-page:nth-child(3) .snap-page__layer {
+  background: radial-gradient(circle at 50% 70%, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0) 64%);
+}
+.snap-page:nth-child(4) .snap-page__layer {
+  background: radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 66%);
+}
+
+@keyframes snap-parallax {
+  from { transform: translateY(8%); }
+  to   { transform: translateY(-8%); }
+}
+
+.snap-placeholder {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+  width: min(80%, 420px);
+  padding: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+}
+
+.snap-placeholder__label {
+  display: block;
+  margin-bottom: 1rem;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.snap-placeholder__bar {
+  height: 0.75rem;
+  margin-top: 0.75rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.snap-placeholder__bar:last-child { width: 60%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .snap-page__layer { animation: none; transform: none; }
+}
+
+@supports not (animation-timeline: view()) {
+  .snap-page__layer { animation: none; transform: none; }
+}
+
 @import 'tailwindcss';

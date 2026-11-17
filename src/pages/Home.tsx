@@ -4,7 +4,8 @@ import { useEffect, useRef } from 'react';
 const NOISE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="4" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>`;
 const GRAIN = `url("data:image/svg+xml,${encodeURIComponent(NOISE_SVG)}")`;
 
-const GLOW_SIZE = 420;
+const GLOW_SIZE = 320;
+const PAGES = [1, 2, 3];
 
 const Home = () => {
   const glow = useRef<HTMLDivElement>(null);
@@ -66,15 +67,33 @@ const Home = () => {
   return (
     <div
       style={{
-        position: 'fixed',
-        inset: 0,
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+        height: '100%',
         background: '#000',
         overflow: 'hidden',
         userSelect: 'none',
-        touchAction: 'none',
         isolation: 'isolate',
       }}
     >
+      <div className="snap-scroller" role="region" aria-label="Portfolio snap pages" tabIndex={0}>
+        <section className="snap-page" aria-label="Front page">
+          <div className="snap-page__layer" aria-hidden="true" />
+        </section>
+        {PAGES.map((page) => (
+          <section key={page} className="snap-page" aria-label={`Page ${page}`}>
+            <div className="snap-page__layer" aria-hidden="true" />
+            <div className="snap-placeholder">
+              <span className="snap-placeholder__label">Page {page} placeholder</span>
+              <div className="snap-placeholder__bar" aria-hidden="true" />
+              <div className="snap-placeholder__bar" aria-hidden="true" />
+            </div>
+          </section>
+        ))}
+      </div>
       {/* grainy black background */}
       <div
         style={{
@@ -85,6 +104,7 @@ const Home = () => {
           opacity: 0.15,
           pointerEvents: 'none',
         }}
+        aria-hidden="true"
       />
       {/* white grainy glow that eases toward the pointer and lights the grain beneath it */}
       <div
@@ -96,14 +116,15 @@ const Home = () => {
           width: `${GLOW_SIZE}px`,
           height: `${GLOW_SIZE}px`,
           borderRadius: '50%',
-          background: `radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.5) 28%, rgba(255,255,255,0) 62%), ${GRAIN}`,
+          background: `radial-gradient(circle, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.25) 30%, rgba(255,255,255,0) 66%), ${GRAIN}`,
           backgroundSize: '100% 100%, 256px 256px',
           backgroundRepeat: 'no-repeat, repeat',
           mixBlendMode: 'screen',
-          filter: 'blur(22px)',
+          filter: 'blur(20px)',
           pointerEvents: 'none',
           transform: `translate(calc(50vw - ${GLOW_SIZE / 2}px), calc(50vh - ${GLOW_SIZE / 2}px))`,
         }}
+        aria-hidden="true"
       />
     </div>
   );

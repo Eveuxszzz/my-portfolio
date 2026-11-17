@@ -8,10 +8,11 @@ import './App.css';
 
 function App() {
   const location = useLocation();
+  const isHome = location.pathname === '/';
   return (
-    <div className="min-h-screen bg-gray-50">
-      {location.pathname !== '/' && <Header />}
-      <main className="container mx-auto px-4 py-8">
+    <div className={`min-h-screen bg-gray-50${isHome ? ' app-snap-shell' : ''}`}>
+      {!isHome && <Header />}
+      <main className={isHome ? 'app-snap-view' : 'container mx-auto px-4 py-8'}>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/about" element={<About />} />

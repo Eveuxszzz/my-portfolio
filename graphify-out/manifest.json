@@ -1,0 +1,87 @@
+{
+  ".planning/config.json": {
+    "mtime": 1794926307.8159373,
+    "seen": 1794926529.0597312,
+    "ast_hash": "e1f704cfdb059248781a7ef2ec27131d",
+    "semantic_hash": "e1f704cfdb059248781a7ef2ec27131d",
+    "ast_empty": true
+  },
+  "package.json": {
+    "mtime": 1794878722.311491,
+    "seen": 1794926529.0597363,
+    "ast_hash": "6d326ab0a42d47689d6685f0ad75055f",
+    "semantic_hash": "6d326ab0a42d47689d6685f0ad75055f"
+  },
+  "setup-github.sh": {
+    "mtime": 1794835916.6839263,
+    "seen": 1794926529.059898,
+    "ast_hash": "9d15f76a8322956d24ebd262a39de7ee",
+    "semantic_hash": "9d15f76a8322956d24ebd262a39de7ee"
+  },
+  "setup_github.ps1": {
+    "mtime": 1794835924.693654,
+    "seen": 1794926529.059993,
+    "ast_hash": "40ca7ad0d5b4257b363e496cd71721fb",
+    "semantic_hash": "40ca7ad0d5b4257b363e496cd71721fb"
+  },
+  "src/App.tsx": {
+    "mtime": 1794925662.5353618,
+    "seen": 1794926529.0600815,
+    "ast_hash": "67e598abdbc69077a2a6250821ce7f5d",
+    "semantic_hash": "67e598abdbc69077a2a6250821ce7f5d"
+  },
+  "src/components/Header.tsx": {
+    "mtime": 1794925667.1299875,
+    "seen": 1794926529.0601695,
+    "ast_hash": "4e97211f70fa2c3e4d300db328ab8c7b",
+    "semantic_hash": "4e97211f70fa2c3e4d300db328ab8c7b"
+  },
+  "src/components/PortfolioItem.tsx": {
+    "mtime": 1794835860.9353428,
+    "seen": 1794926529.0602577,
+    "ast_hash": "44a6d40cb91e45d9747cd7aa22fedf9a",
+    "semantic_hash": "44a6d40cb91e45d9747cd7aa22fedf9a"
+  },
+  "src/index.tsx": {
+    "mtime": 1794835797.1810095,
+    "seen": 1794926529.0603437,
+    "ast_hash": "d9d08a0f0b30b30f7db4dd5c28924e18",
+    "semantic_hash": "d9d08a0f0b30b30f7db4dd5c28924e18"
+  },
+  "src/pages/About.tsx": {
+    "mtime": 1794835808.6640334,
+    "seen": 1794926529.060445,
+    "ast_hash": "92fe9f41b0331baee964b83bfeb19197",
+    "semantic_hash": "92fe9f41b0331baee964b83bfeb19197"
+  },
+  "src/pages/Contact.tsx": {
+    "mtime": 1794835819.5820127,
+    "seen": 1794926529.0605416,
+    "ast_hash": "431e0bc71dbe0edf69298f27a453e2ba",
+    "semantic_hash": "431e0bc71dbe0edf69298f27a453e2ba"
+  },
+  "src/pages/Home.tsx": {
+    "mtime": 1794926218.7700007,
+    "seen": 1794926529.060638,
+    "ast_hash": "d6de4030f62f42dce8dadf6b89262cd5",
+    "semantic_hash": "d6de4030f62f42dce8dadf6b89262cd5"
+  },
+  "src/pages/Projects.tsx": {
+    "mtime": 1794835816.7238028,
+    "seen": 1794926529.0607722,
+    "ast_hash": "776a4697dde658e14d762391f69b8605",
+    "semantic_hash": "776a4697dde658e14d762391f69b8605"
+  },
+  "tsconfig.json": {
+    "mtime": 1794878661.5045278,
+    "seen": 1794926529.0608704,
+    "ast_hash": "dfbfeaf9f0fef4f3c5a248c6b52f37ab",
+    "semantic_hash": "dfbfeaf9f0fef4f3c5a248c6b52f37ab"
+  },
+  "vite.config.ts": {
+    "mtime": 1794835891.0391839,
+    "seen": 1794926529.0609627,
+    "ast_hash": "4ee23447631ce92e770fc158b1b85b78",
+    "semantic_hash": "4ee23447631ce92e770fc158b1b85b78"
+  }
+}

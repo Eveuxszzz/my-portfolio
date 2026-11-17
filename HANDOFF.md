@@ -24,7 +24,7 @@ my-portfolio/
 │   │   ├── Header.tsx   # Site navigation
 │   │   └── PortfolioItem.tsx  # Project card (Project interface defined here)
 │   ├── pages/
-│   │   ├── Home.tsx     # Hero + bio
+│   │   ├── Home.tsx     # Dark snap deck: plain front page + 3 placeholder pages, grain + pointer glow
 │   │   ├── About.tsx    # Bio / skills
 │   │   ├── Projects.tsx # Project data + cards
 │   │   └── Contact.tsx  # Static contact form
