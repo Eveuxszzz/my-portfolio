@@ -80,12 +80,12 @@ const Home = () => {
       }}
     >
       <div className="snap-scroller" role="region" aria-label="Portfolio snap pages" tabIndex={0}>
-        <section className="snap-page" aria-label="Front page">
-          <div className="snap-page__layer" aria-hidden="true" />
-        </section>
+        <div className="gradient-field" aria-hidden="true">
+          <div className="gradient-field__inner" />
+        </div>
+        <section className="snap-page" aria-label="Front page" />
         {PAGES.map((page) => (
           <section key={page} className="snap-page" aria-label={`Page ${page}`}>
-            <div className="snap-page__layer" aria-hidden="true" />
             <div className="snap-placeholder">
               <span className="snap-placeholder__label">Page {page} placeholder</span>
               <div className="snap-placeholder__bar" aria-hidden="true" />
