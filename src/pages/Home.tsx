@@ -1,20 +1,110 @@
+import { useEffect, useRef } from 'react';
+
+// Grayscale fractal-noise grain as a fully-encoded data URI (safe inside CSS url("...")).
+const NOISE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="4" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>`;
+const GRAIN = `url("data:image/svg+xml,${encodeURIComponent(NOISE_SVG)}")`;
+
+const GLOW_SIZE = 420;
+
 const Home = () => {
+  const glow = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = glow.current;
+    if (!el) return;
+
+    // The glow eases toward the pointer each frame, trailing it dynamically,
+    // and scales up with how fast the pointer is moving.
+    const target = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    const pos = { x: target.x, y: target.y };
+    let raf = 0;
+    let running = false;
+
+    const tick = () => {
+      const dx = target.x - pos.x;
+      const dy = target.y - pos.y;
+      const dist = Math.hypot(dx, dy);
+      pos.x += dx * 0.16;
+      pos.y += dy * 0.16;
+      const scale = 1 + Math.min(dist * 0.004, 0.35);
+      el.style.transform = `translate(${pos.x - GLOW_SIZE / 2}px, ${pos.y - GLOW_SIZE / 2}px) scale(${scale.toFixed(3)})`;
+      if (dist > 0.2 || scale > 1.001) {
+        raf = requestAnimationFrame(tick);
+      } else {
+        running = false;
+      }
+    };
+    const start = () => {
+      if (!running) {
+        running = true;
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    const onMouse = (e: MouseEvent) => {
+      target.x = e.clientX;
+      target.y = e.clientY;
+      start();
+    };
+    const onTouch = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (t) {
+        target.x = t.clientX;
+        target.y = t.clientY;
+        start();
+      }
+    };
+
+    window.addEventListener('mousemove', onMouse);
+    window.addEventListener('touchmove', onTouch, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', onMouse);
+      window.removeEventListener('touchmove', onTouch);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
   return (
-    <div className="text-center py-12">
-      <h1 className="text-4xl font-bold text-gray-900 mb-4">Welcome to My Portfolio</h1>
-      <p className="text-xl text-gray-600 mb-8">Full Stack Developer & Designer</p>
-      <div className="max-w-2xl mx-auto">
-        <img 
-          src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"
-          alt="Developer workspace"
-          className="rounded-lg shadow-lg mb-8"
-        />
-        <p className="text-gray-700 leading-relaxed">
-          I'm a passionate developer who loves creating beautiful, functional web applications.
-          With expertise in React, TypeScript, and modern web technologies, I bring ideas to life
-          through clean code and thoughtful design.
-        </p>
-      </div>
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: '#000',
+        overflow: 'hidden',
+        userSelect: 'none',
+        touchAction: 'none',
+        isolation: 'isolate',
+      }}
+    >
+      {/* grainy black background */}
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundImage: GRAIN,
+          backgroundRepeat: 'repeat',
+          opacity: 0.15,
+          pointerEvents: 'none',
+        }}
+      />
+      {/* white grainy glow that eases toward the pointer and lights the grain beneath it */}
+      <div
+        ref={glow}
+        style={{
+          position: 'fixed',
+          left: 0,
+          top: 0,
+          width: `${GLOW_SIZE}px`,
+          height: `${GLOW_SIZE}px`,
+          borderRadius: '50%',
+          background: `radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.5) 28%, rgba(255,255,255,0) 62%), ${GRAIN}`,
+          backgroundSize: '100% 100%, 256px 256px',
+          backgroundRepeat: 'no-repeat, repeat',
+          mixBlendMode: 'screen',
+          filter: 'blur(22px)',
+          pointerEvents: 'none',
+          transform: `translate(calc(50vw - ${GLOW_SIZE / 2}px), calc(50vh - ${GLOW_SIZE / 2}px))`,
+        }}
+      />
     </div>
   );
 };
