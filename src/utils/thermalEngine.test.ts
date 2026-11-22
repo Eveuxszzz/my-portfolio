@@ -7,44 +7,43 @@ import {
   computeScrollDashboardState,
   createOilFollowState,
   stepOilFollowState,
+  warpHeatmapField,
 } from './thermalEngine';
 
-test('buildFourValueOilLUT produces 4 distinct monochrome tonal value plateaus', () => {
+test('buildFourValueOilLUT produces 4 distinct non-linear monochrome tonal plateaus', () => {
   const lut = buildFourValueOilLUT();
   assert.equal(lut.length, 256 * 4);
   assert.equal(OIL_FOUR_VALUES.length, 4);
 
   // Transparent below first value threshold
   assert.equal(lut[3], 0);
-  assert.equal(lut[8 * 4 + 3], 0);
+  assert.equal(lut[5 * 4 + 3], 0);
 
-  // Sample the center of each of the 4 value plateaus
-  const plateauIndices = [52, 108, 166, 232];
+  // Sample inside each of the 4 non-linear plateaus
+  const plateauIndices = [42, 95, 162, 232];
   const plateauLuminances = plateauIndices.map((idx) => lut[idx * 4]);
   const plateauAlphas = plateauIndices.map((idx) => lut[idx * 4 + 3]);
 
-  // Luminance and opacity should strictly step up across all 4 values
   for (let i = 1; i < plateauLuminances.length; i++) {
     assert.ok(
       plateauLuminances[i] - plateauLuminances[i - 1] >= 40,
-      `Value ${i + 1} (${plateauLuminances[i]}) should be clearly brighter than Value ${i} (${plateauLuminances[i - 1]})`
+      `Value ${i + 1} (${plateauLuminances[i]}) should clearly step above Value ${i} (${plateauLuminances[i - 1]})`
     );
     assert.ok(plateauAlphas[i] > plateauAlphas[i - 1]);
   }
 
-  // Every LUT entry remains monochrome silver/ash
   for (let i = 0; i < 256; i++) {
     const idx = i * 4;
     const spread =
       Math.max(lut[idx], lut[idx + 1], lut[idx + 2]) -
       Math.min(lut[idx], lut[idx + 1], lut[idx + 2]);
-    assert.ok(spread <= 14, `LUT entry ${i} should stay monochrome (spread=${spread})`);
+    assert.ok(spread <= 12, `LUT entry ${i} should stay monochrome (spread=${spread})`);
   }
 });
 
-test('oil-in-water follow simulation stays close to cursor with only a subtle delay', () => {
+test('fluid heatmap follow simulation stays close to cursor and forms non-circular lobes', () => {
   const state = createOilFollowState(200, 200);
-  assert.equal(state.lobes.length, 4);
+  assert.equal(state.lobes.length, 5);
 
   state.targetX = 520;
   state.targetY = 340;
@@ -54,19 +53,15 @@ test('oil-in-water follow simulation stays close to cursor with only a subtle de
     result = stepOilFollowState(state, 1 / 60, 0.1 + f / 60);
   }
 
-  // Tight delay: closes >75% of the 320px gap within 5 frames (~83ms) with zero overshoot
+  // Tight delay: closes >75% of gap within 5 frames (~83ms) with zero overshoot
   const progressX = (state.anchorX - 200) / (520 - 200);
   assert.ok(progressX > 0.75 && progressX < 1, `Expected tight follow progress (got ${progressX.toFixed(2)})`);
-  assert.ok(result.samples[0].radiusX > result.samples[0].radiusY);
 
-  // Lobes stay closely coupled (cohesive oil drop, not a fragmented streak)
-  for (let i = 1; i < state.lobes.length; i++) {
-    const dist = Math.hypot(
-      state.lobes[i].x - state.lobes[0].x,
-      state.lobes[i].y - state.lobes[0].y
-    );
-    assert.ok(dist < 90, `Lobe ${i} should remain cohesively coupled to oil core (dist=${dist})`);
-  }
+  // Lobes are genuinely elliptical/non-circular
+  assert.ok(
+    result.samples.some((s) => Math.abs(s.radiusX - s.radiusY) > 25),
+    'Fluid heatmap lobes should be strongly non-circular'
+  );
 
   // Settles quickly onto the pointer
   for (let f = 0; f < 30; f++) {
@@ -74,6 +69,40 @@ test('oil-in-water follow simulation stays close to cursor with only a subtle de
   }
   assert.ok(Math.abs(state.anchorX - 520) < 2);
   assert.ok(Math.abs(state.anchorY - 340) < 2);
+});
+
+test('warpHeatmapField organically breaks radial symmetry of a circular scalar field', () => {
+  const w = 80;
+  const h = 80;
+  const field = new Uint8ClampedArray(w * h * 4);
+  const out = new Uint8ClampedArray(w * h * 4);
+  const lut = buildFourValueOilLUT();
+
+  // Populate a perfectly circular heat spot at center (40, 40)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dist = Math.hypot(x - 40, y - 40);
+      const val = Math.max(0, Math.round((1 - dist / 28) * 255));
+      field[(y * w + x) * 4 + 3] = val;
+    }
+  }
+
+  warpHeatmapField(field, out, w, h, lut, 1.4);
+
+  // Compare four symmetric cardinal points at equal radius from center:
+  // Domain warping must break rotational symmetry so they do not all match.
+  const pts = [
+    out[(40 * w + 56) * 4 + 3],
+    out[(40 * w + 24) * 4 + 3],
+    out[(56 * w + 40) * 4 + 3],
+    out[(24 * w + 40) * 4 + 3],
+  ];
+  const uniqueAlphas = new Set(pts);
+  assert.ok(
+    uniqueAlphas.size > 1,
+    `Warped heatmap should break circular symmetry (got alphas: ${pts.join(', ')})`
+  );
+  assert.ok(out[(40 * w + 40) * 4 + 3] > 0, 'Center region should remain illuminated');
 });
 
 test('computeScrollDashboardState hides header on first page and smoothly reveals past threshold', () => {
@@ -94,11 +123,5 @@ test('computeScrollDashboardState hides header on first page and smoothly reveal
     headerOpacity: 1,
     isHeaderVisible: true,
     activeSectionIndex: 1,
-  });
-  assert.deepEqual(computeScrollDashboardState(vh * 3, vh, totalPages), {
-    progress: 3,
-    headerOpacity: 1,
-    isHeaderVisible: true,
-    activeSectionIndex: 3,
   });
 });

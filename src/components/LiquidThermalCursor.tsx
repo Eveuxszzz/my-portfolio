@@ -4,11 +4,12 @@ import {
   buildFourValueOilLUT,
   createOilFollowState,
   stepOilFollowState,
+  warpHeatmapField,
 } from '../utils/thermalEngine';
 
-const BUFFER_SCALE = 0.24;
+const BUFFER_SCALE = 0.22;
 const MIN_BUFFER_DIM = 96;
-const MAX_BUFFER_WIDTH = 360;
+const MAX_BUFFER_WIDTH = 320;
 
 const LiquidThermalCursor = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -76,16 +77,25 @@ const LiquidThermalCursor = () => {
       ctx.clearRect(0, 0, bufW, bufH);
       const cx = sim.targetX * scaleX;
       const cy = sim.targetY * scaleY;
-      const maxR = 148 * scaleX;
-      const radii = [maxR, maxR * 0.76, maxR * 0.52, maxR * 0.28];
+      const maxR = 160 * scaleX;
+      const shapes = [
+        { rx: maxR * 1.15, ry: maxR * 0.85, ox: 0, oy: 0, rot: -0.25 },
+        { rx: maxR * 0.84, ry: maxR * 0.66, ox: -5, oy: 2, rot: -0.18 },
+        { rx: maxR * 0.56, ry: maxR * 0.44, ox: -8, oy: -2, rot: -0.1 },
+        { rx: maxR * 0.28, ry: maxR * 0.22, ox: -6, oy: -3, rot: 0.05 },
+      ];
 
-      // Draw 4 calm concentric values for reduced-motion accessibility
       for (let i = 0; i < OIL_FOUR_VALUES.length; i++) {
         const v = OIL_FOUR_VALUES[i];
+        const s = shapes[i];
+        ctx.save();
+        ctx.translate(cx + s.ox, cy + s.oy);
+        ctx.rotate(s.rot);
         ctx.fillStyle = `rgba(${v.r}, ${v.g}, ${v.b}, ${(v.a / 255).toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(cx, cy, radii[i], 0, Math.PI * 2);
+        ctx.ellipse(0, 0, s.rx, s.ry, 0, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
       }
     };
 
@@ -102,12 +112,15 @@ const LiquidThermalCursor = () => {
       const nowSec = now * 0.001;
       const { samples, kineticEnergy } = stepOilFollowState(sim, dt, nowSec);
 
-      // Gently fade visibility when the pointer leaves the document
       const targetVis = pointerInside ? 1 : 0;
-      visibilityAlpha += (targetVis - visibilityAlpha) * Math.min(1, 0.12 * (dt * 60));
+      visibilityAlpha += (targetVis - visibilityAlpha) * Math.min(1, 0.16 * (dt * 60));
 
-      // 1. Clear field each frame so it behaves as a clean, cohesive oil drop following the pointer
       fieldCtx.clearRect(0, 0, bufW, bufH);
+
+      let minX = bufW;
+      let minY = bufH;
+      let maxX = 0;
+      let maxY = 0;
 
       if (visibilityAlpha > 0.01) {
         fieldCtx.globalCompositeOperation = 'lighter';
@@ -118,18 +131,24 @@ const LiquidThermalCursor = () => {
           const cy = s.y * scaleY;
           const rx = Math.max(6, s.radiusX * scaleX);
           const ry = Math.max(6, s.radiusY * scaleY);
+          const maxExtent = Math.max(rx, ry);
+
+          minX = Math.min(minX, cx - maxExtent);
+          minY = Math.min(minY, cy - maxExtent);
+          maxX = Math.max(maxX, cx + maxExtent);
+          maxY = Math.max(maxY, cy + maxExtent);
 
           fieldCtx.save();
           fieldCtx.translate(cx, cy);
           fieldCtx.rotate(s.angle);
           fieldCtx.scale(1, ry / rx);
 
-          const alpha = Math.min(0.6, s.weight * visibilityAlpha);
+          const alpha = Math.min(0.62, s.weight * visibilityAlpha);
           const grad = fieldCtx.createRadialGradient(0, 0, 0, 0, 0, rx);
           grad.addColorStop(0, `rgba(255, 255, 255, ${alpha.toFixed(3)})`);
-          grad.addColorStop(0.32, `rgba(255, 255, 255, ${(alpha * 0.7).toFixed(3)})`);
-          grad.addColorStop(0.64, `rgba(255, 255, 255, ${(alpha * 0.36).toFixed(3)})`);
-          grad.addColorStop(0.86, `rgba(255, 255, 255, ${(alpha * 0.12).toFixed(3)})`);
+          grad.addColorStop(0.28, `rgba(255, 255, 255, ${(alpha * 0.72).toFixed(3)})`);
+          grad.addColorStop(0.58, `rgba(255, 255, 255, ${(alpha * 0.34).toFixed(3)})`);
+          grad.addColorStop(0.84, `rgba(255, 255, 255, ${(alpha * 0.1).toFixed(3)})`);
           grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
 
           fieldCtx.fillStyle = grad;
@@ -140,40 +159,30 @@ const LiquidThermalCursor = () => {
         }
       }
 
-      // 2. Map the merged metaball field through the 4-value monochrome gradient LUT
+      // Warp the merged asymmetric metaball field and map through the 4-value heatmap LUT
       if (outputImageData) {
+        const warpMargin = Math.ceil(bufW * 0.055) + 4;
         const fieldData = fieldCtx.getImageData(0, 0, bufW, bufH).data;
-        const out = outputImageData.data;
 
-        for (let i = 0; i < fieldData.length; i += 4) {
-          const density = fieldData[i + 3];
-          if (density < 10) {
-            out[i] = 0;
-            out[i + 1] = 0;
-            out[i + 2] = 0;
-            out[i + 3] = 0;
-          } else {
-            const lutIdx = density * 4;
-            out[i] = lut[lutIdx];
-            out[i + 1] = lut[lutIdx + 1];
-            out[i + 2] = lut[lutIdx + 2];
-            out[i + 3] = lut[lutIdx + 3];
-          }
-        }
+        warpHeatmapField(fieldData, outputImageData.data, bufW, bufH, lut, nowSec, {
+          minX: minX - warpMargin,
+          minY: minY - warpMargin,
+          maxX: maxX + warpMargin,
+          maxY: maxY + warpMargin,
+        });
 
         oilCtx.putImageData(outputImageData, 0, 0);
 
-        // 3. Subtle smoothing keeps the 4 tonal bands distinct yet organic like oil in water
         ctx.clearRect(0, 0, bufW, bufH);
         ctx.save();
-        ctx.filter = 'blur(1.2px)';
+        ctx.filter = 'blur(1.4px)';
         ctx.drawImage(oilCanvas, 0, 0);
         ctx.restore();
       }
 
       const idleMs = now - sim.lastMoveTime;
       const shouldKeepRunning = pointerInside
-        ? kineticEnergy > 0.25 || idleMs < 2600
+        ? kineticEnergy > 0.25 || idleMs < 2400
         : visibilityAlpha > 0.015;
 
       if (shouldKeepRunning) {
