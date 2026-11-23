@@ -24,13 +24,25 @@ export interface SculptedTierGeometry {
   centerY: number;
 }
 
+export interface VelocityLeanMetrics {
+  speed: number;
+  angle: number;
+  leanStrength: number;
+  dirX: number;
+  dirY: number;
+}
+
 export interface PebbleFollowState {
   targetX: number;
   targetY: number;
+  lastTargetX: number;
+  lastTargetY: number;
+  hasPointerMoved: boolean;
   anchorX: number;
   anchorY: number;
-  vx: number;
-  vy: number;
+  /** Low-pass smoothed cursor velocity vector in px/s */
+  smoothVx: number;
+  smoothVy: number;
   leanAngle: number;
   leanStrength: number;
   lastMoveTime: number;
@@ -39,6 +51,7 @@ export interface PebbleFollowState {
 export interface StepPebbleResult {
   tiers: SculptedTierGeometry[];
   kineticEnergy: number;
+  lean: VelocityLeanMetrics;
 }
 
 export interface ScrollDashboardState {
@@ -123,6 +136,56 @@ const lerpAngle = (from: number, to: number, t: number): number => {
 };
 
 /**
+ * Exact frame-rate-independent first-order exponential smoothing coefficient:
+ * alpha = 1 - exp(-dt / tau).
+ */
+export function exponentialSmoothingFactor(
+  dtSeconds: number,
+  timeConstantSeconds: number
+): number {
+  if (dtSeconds <= 0) return 0;
+  if (timeConstantSeconds <= 0) return 1;
+  return 1 - Math.exp(-dtSeconds / timeConstantSeconds);
+}
+
+/**
+ * C2-continuous quintic Hermite smoothing polynomial (6t^5 - 15t^4 + 10t^3).
+ * Has zero first and second derivatives at t = 0 and t = 1 for silky transitions.
+ */
+export function smootherstep(t: number): number {
+  const x = clamp01(t);
+  return x * x * x * (x * (x * 6 - 15) + 10);
+}
+
+/**
+ * Maps a smoothed 2D cursor velocity vector (px/s) through a smooth hyperbolic
+ * tangent saturation curve composed with quintic smootherstep so directional
+ * lean ramps organically from stillness and saturates gently on fast flicks.
+ */
+export function computeVelocityLean(
+  vx: number,
+  vy: number,
+  referenceSpeedPxPerSec = 1100
+): VelocityLeanMetrics {
+  const speed = Math.hypot(vx, vy);
+  if (speed < 1e-3) {
+    return { speed: 0, angle: 0, leanStrength: 0, dirX: 0, dirY: 0 };
+  }
+
+  const normalized = Math.tanh(speed / Math.max(referenceSpeedPxPerSec, 1));
+  const leanStrength = smootherstep(normalized);
+  const invSpeed = 1 / speed;
+
+  return {
+    speed,
+    angle: Math.atan2(vy, vx),
+    leanStrength,
+    dirX: vx * invSpeed,
+    dirY: vy * invSpeed,
+  };
+}
+
+/**
  * Initializes the tight-follow sculptural pebble heatmap state.
  */
 export function createPebbleFollowState(
@@ -132,10 +195,13 @@ export function createPebbleFollowState(
   return {
     targetX: initialX,
     targetY: initialY,
+    lastTargetX: initialX,
+    lastTargetY: initialY,
+    hasPointerMoved: false,
     anchorX: initialX,
     anchorY: initialY,
-    vx: 0,
-    vy: 0,
+    smoothVx: 0,
+    smoothVy: 0,
     leanAngle: -0.35,
     leanStrength: 0,
     lastMoveTime: 0,
@@ -143,11 +209,29 @@ export function createPebbleFollowState(
 }
 
 /**
+ * Updates cursor target coordinates cleanly without introducing a velocity spike
+ * on the first pointer entry event.
+ */
+export function updatePebbleTarget(
+  state: PebbleFollowState,
+  x: number,
+  y: number,
+  nowMs: number
+): void {
+  if (!state.hasPointerMoved) {
+    state.lastTargetX = x;
+    state.lastTargetY = y;
+    state.hasPointerMoved = true;
+  }
+  state.targetX = x;
+  state.targetY = y;
+  state.lastMoveTime = nowMs;
+}
+
+/**
  * Evaluates a single smooth closed sculptural pebble / organic kidney contour
- * using strictly bounded low-order polar harmonics (n = 2 pebble axis +
- * n = 3 gentle kidney indentation + subtle n = 4 polish).
- * Total harmonic amplitude stays < 0.38, guaranteeing a clean, unified contour
- * that never pinches, self-intersects, or breaks into messy fragments.
+ * using strictly bounded low-order polar harmonics plus a subtle asymmetric
+ * directional lean along the smoothed velocity vector.
  */
 export function samplePebbleContour(
   centerX: number,
@@ -160,16 +244,21 @@ export function samplePebbleContour(
     axisAngle: number;
     kidneyAngle: number;
     polishAngle: number;
+    leanBias?: number;
+    leanAngle?: number;
     vertexCount?: number;
   }
 ): ContourPoint[] {
   const count = Math.max(16, options.vertexCount ?? 64);
   const points: ContourPoint[] = new Array(count);
+  const leanBias = options.leanBias ?? 0;
+  const leanAngle = options.leanAngle ?? options.axisAngle;
 
   for (let i = 0; i < count; i++) {
     const theta = (i / count) * Math.PI * 2;
     const mod =
       1 +
+      leanBias * Math.cos(theta - leanAngle) +
       options.a2 * Math.cos(2 * (theta - options.axisAngle)) +
       options.a3 * Math.cos(3 * (theta - options.kidneyAngle)) +
       options.a4 * Math.cos(4 * (theta - options.polishAngle));
@@ -185,8 +274,9 @@ export function samplePebbleContour(
 }
 
 /**
- * Advances the tight viscous anchor, damped directional lean, and slow gentle
- * breathing morph to produce all 4 nested monochrome topographic contours.
+ * Advances the tight viscous anchor and mathematically smoothed cursor velocity
+ * vector (continuous-time exponential low-pass filter + tanh/smootherstep lean
+ * response) to produce all 4 nested monochrome topographic contours.
  */
 export function stepPebbleFollowState(
   state: PebbleFollowState,
@@ -194,73 +284,94 @@ export function stepPebbleFollowState(
   nowSeconds: number,
   vertexCount = 64
 ): StepPebbleResult {
-  const clampedDt = Math.max(0.001, Math.min(dtSeconds, 0.05));
-  const stepScale = clampedDt * 60;
+  const dt = Math.max(0.001, Math.min(dtSeconds, 0.05));
 
-  // Tight, bounce-free viscous follow (~30% closure per 60fps frame -> only a little delay)
-  const anchorEase = 1 - Math.pow(0.70, stepScale);
-  const nextX = state.anchorX + (state.targetX - state.anchorX) * anchorEase;
-  const nextY = state.anchorY + (state.targetY - state.anchorY) * anchorEase;
-  const instVx = (nextX - state.anchorX) / Math.max(stepScale, 0.25);
-  const instVy = (nextY - state.anchorY) / Math.max(stepScale, 0.25);
-
+  // 1. Tight, frame-rate-independent viscous anchor follow (tau = 0.048s -> ~30% per 60Hz frame)
+  const anchorAlpha = exponentialSmoothingFactor(dt, 0.048);
+  const nextX = state.anchorX + (state.targetX - state.anchorX) * anchorAlpha;
+  const nextY = state.anchorY + (state.targetY - state.anchorY) * anchorAlpha;
+  const anchorVx = (nextX - state.anchorX) / dt;
+  const anchorVy = (nextY - state.anchorY) / dt;
   state.anchorX = nextX;
   state.anchorY = nextY;
 
-  const velEase = Math.min(1, 0.22 * stepScale);
-  state.vx = lerp(state.vx, instVx, velEase);
-  state.vy = lerp(state.vy, instVy, velEase);
+  // 2. Measure true cursor velocity vector (blended lightly with anchor velocity for
+  //    continuous silky flow between discrete pointer events) and low-pass smooth it.
+  const rawCursorVx = (state.targetX - state.lastTargetX) / dt;
+  const rawCursorVy = (state.targetY - state.lastTargetY) / dt;
+  state.lastTargetX = state.targetX;
+  state.lastTargetY = state.targetY;
 
-  const speed = Math.hypot(state.vx, state.vy);
-  const targetLeanStrength = clamp01(speed / 24);
-  const leanEase = Math.min(1, (targetLeanStrength > state.leanStrength ? 0.22 : 0.08) * stepScale);
-  state.leanStrength = lerp(state.leanStrength, targetLeanStrength, leanEase);
+  const drivenVx = rawCursorVx * 0.65 + anchorVx * 0.35;
+  const drivenVy = rawCursorVy * 0.65 + anchorVy * 0.35;
+  const drivenSpeed = Math.hypot(drivenVx, drivenVy);
+  const currentSmoothSpeed = Math.hypot(state.smoothVx, state.smoothVy);
 
-  if (speed > 0.4) {
-    const motionAngle = Math.atan2(state.vy, state.vx);
-    state.leanAngle = lerpAngle(state.leanAngle, motionAngle, Math.min(1, 0.16 * stepScale));
+  // Asymmetric exponential smoothing: responsive attack when accelerating, calm viscous release when stopping
+  const velocityTau = drivenSpeed > currentSmoothSpeed ? 0.075 : 0.165;
+  const velocityAlpha = exponentialSmoothingFactor(dt, velocityTau);
+  state.smoothVx = lerp(state.smoothVx, drivenVx, velocityAlpha);
+  state.smoothVy = lerp(state.smoothVy, drivenVy, velocityAlpha);
+
+  // 3. Apply smooth nonlinear velocity-to-lean transfer (tanh + quintic smootherstep)
+  const lean = computeVelocityLean(state.smoothVx, state.smoothVy, 1100);
+
+  const leanAlpha = exponentialSmoothingFactor(
+    dt,
+    lean.leanStrength > state.leanStrength ? 0.085 : 0.19
+  );
+  state.leanStrength = lerp(state.leanStrength, lean.leanStrength, leanAlpha);
+
+  if (lean.speed > 18) {
+    const angleAlpha = exponentialSmoothingFactor(dt, 0.11);
+    state.leanAngle = lerpAngle(state.leanAngle, lean.angle, angleAlpha);
   }
 
-  // Slow, calm breathing morph keeps the sculptural pebble subtly alive
+  // 4. Slow calm breathing morph combined with subtle directional lean along the smoothed velocity vector
   const restAxis = -0.35 + Math.sin(nowSeconds * 0.34) * 0.28;
-  const axisAngle = lerpAngle(restAxis, state.leanAngle, state.leanStrength * 0.72);
+  const axisAngle = lerpAngle(restAxis, state.leanAngle, state.leanStrength * 0.78);
   const kidneyBase = 0.75 + Math.sin(nowSeconds * 0.26 + 1.1) * 0.38;
   const polishBase = -0.9 + Math.cos(nowSeconds * 0.21) * 0.45;
 
   const breathScale = 1 + Math.sin(nowSeconds * 0.85) * 0.028;
-  const baseA2 = 0.155 + Math.sin(nowSeconds * 0.62) * 0.02 + state.leanStrength * 0.075;
-  const baseA3 = 0.092 + Math.cos(nowSeconds * 0.48 + 0.8) * 0.018;
-  const baseA4 = 0.018 + Math.sin(nowSeconds * 0.39 + 2.1) * 0.006;
+  const baseA2 = 0.15 + Math.sin(nowSeconds * 0.62) * 0.018 + state.leanStrength * 0.085;
+  const baseA3 = 0.09 + Math.cos(nowSeconds * 0.48 + 0.8) * 0.016;
+  const baseA4 = 0.017 + Math.sin(nowSeconds * 0.39 + 2.1) * 0.005;
+  const baseLeanBias = state.leanStrength * 0.058;
 
-  // Eccentric thermal core drifts gently inside the pebble along its organic spine
+  // Eccentric thermal core leans gently forward into the direction of cursor travel
   const eccentricDir = axisAngle + 0.32 + Math.sin(nowSeconds * 0.31) * 0.24;
   const eccentricCos = Math.cos(eccentricDir);
   const eccentricSin = Math.sin(eccentricDir);
-  const leanShiftX = Math.cos(state.leanAngle) * state.leanStrength * 8;
-  const leanShiftY = Math.sin(state.leanAngle) * state.leanStrength * 8;
+  const leanCos = Math.cos(state.leanAngle);
+  const leanSin = Math.sin(state.leanAngle);
+  const forwardShiftMax = state.leanStrength * 14;
 
   const tiers: SculptedTierGeometry[] = PEBBLE_CONTOUR_TIERS.map((spec, idx) => {
+    const tierRatio = idx / (PEBBLE_CONTOUR_TIERS.length - 1);
     const cx =
       state.anchorX +
       eccentricCos * spec.eccentricOffset +
-      leanShiftX * (idx / (PEBBLE_CONTOUR_TIERS.length - 1));
+      leanCos * forwardShiftMax * tierRatio;
     const cy =
       state.anchorY +
       eccentricSin * spec.eccentricOffset +
-      leanShiftY * (idx / (PEBBLE_CONTOUR_TIERS.length - 1));
+      leanSin * forwardShiftMax * tierRatio;
 
-    // Strictly cap harmonics so the shape always remains a smooth sculptural pebble/kidney
     const a2 = Math.min(0.25, baseA2 * spec.a2Scale);
-    const a3 = Math.min(0.115, baseA3 * spec.a3Scale);
-    const a4 = Math.min(0.026, baseA4);
+    const a3 = Math.min(0.112, baseA3 * spec.a3Scale);
+    const a4 = Math.min(0.025, baseA4);
+    const leanBias = Math.min(0.065, baseLeanBias * (0.7 + tierRatio * 0.5));
 
     const points = samplePebbleContour(cx, cy, spec.radius * breathScale, {
       a2,
       a3,
       a4,
-      axisAngle: axisAngle + spec.phaseShift * 0.28,
-      kidneyAngle: kidneyBase + spec.phaseShift * 0.45,
-      polishAngle: polishBase - spec.phaseShift * 0.35,
+      axisAngle: axisAngle + spec.phaseShift * 0.26,
+      kidneyAngle: kidneyBase + spec.phaseShift * 0.42,
+      polishAngle: polishBase - spec.phaseShift * 0.32,
+      leanBias,
+      leanAngle: state.leanAngle,
       vertexCount,
     });
 
@@ -268,9 +379,19 @@ export function stepPebbleFollowState(
   });
 
   const remainingDist = Math.hypot(state.targetX - state.anchorX, state.targetY - state.anchorY);
-  const kineticEnergy = speed + remainingDist * 0.25 + state.leanStrength * 2;
+  const kineticEnergy = lean.speed / 60 + remainingDist * 0.25 + state.leanStrength * 3;
 
-  return { tiers, kineticEnergy };
+  return {
+    tiers,
+    kineticEnergy,
+    lean: {
+      speed: lean.speed,
+      angle: state.leanAngle,
+      leanStrength: state.leanStrength,
+      dirX: leanCos * state.leanStrength,
+      dirY: leanSin * state.leanStrength,
+    },
+  };
 }
 
 /**

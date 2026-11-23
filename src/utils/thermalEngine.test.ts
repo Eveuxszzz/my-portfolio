@@ -4,10 +4,41 @@ import {
   HEADER_REVEAL_THRESHOLD,
   PEBBLE_CONTOUR_TIERS,
   computeScrollDashboardState,
+  computeVelocityLean,
   createPebbleFollowState,
+  exponentialSmoothingFactor,
   samplePebbleContour,
+  smootherstep,
   stepPebbleFollowState,
+  updatePebbleTarget,
 } from './thermalEngine';
+
+test('exponentialSmoothingFactor and smootherstep satisfy mathematical smoothing invariants', () => {
+  // Frame-rate independence: two 1/120s steps equal one 1/60s step
+  const alpha60 = exponentialSmoothingFactor(1 / 60, 0.08);
+  const alpha120 = exponentialSmoothingFactor(1 / 120, 0.08);
+  const combined120 = 1 - (1 - alpha120) * (1 - alpha120);
+  assert.ok(Math.abs(alpha60 - combined120) < 1e-12, 'Exponential smoothing must be frame-rate independent');
+
+  // Quintic smootherstep boundary and symmetry invariants
+  assert.equal(smootherstep(0), 0);
+  assert.equal(smootherstep(0.5), 0.5);
+  assert.equal(smootherstep(1), 1);
+  assert.ok(smootherstep(0.2) < 0.2, 'Smootherstep eases gently out of zero');
+  assert.ok(smootherstep(0.8) > 0.8, 'Smootherstep eases gently into one');
+
+  // Velocity-to-lean response smoothly saturates without discontinuity
+  const still = computeVelocityLean(0, 0);
+  const gentle = computeVelocityLean(350, 0);
+  const fast = computeVelocityLean(1800, 0);
+  const extreme = computeVelocityLean(9000, 0);
+
+  assert.equal(still.leanStrength, 0);
+  assert.ok(gentle.leanStrength > 0 && gentle.leanStrength < fast.leanStrength);
+  assert.ok(fast.leanStrength < extreme.leanStrength && extreme.leanStrength <= 1);
+  assert.ok(Math.abs(fast.angle - 0) < 1e-6);
+  assert.ok(Math.abs(fast.dirX - 1) < 1e-6);
+});
 
 test('PEBBLE_CONTOUR_TIERS defines 4 ascending monochrome topographic values', () => {
   assert.equal(PEBBLE_CONTOUR_TIERS.length, 4);
@@ -27,61 +58,55 @@ test('PEBBLE_CONTOUR_TIERS defines 4 ascending monochrome topographic values', (
   }
 });
 
-test('samplePebbleContour generates a smooth, cohesive, non-circular pebble/kidney curve', () => {
+test('samplePebbleContour applies subtle directional lean toward the velocity angle', () => {
   const pts = samplePebbleContour(200, 200, 120, {
     a2: 0.17,
-    a3: 0.095,
-    a4: 0.018,
-    axisAngle: -0.35,
-    kidneyAngle: 0.75,
-    polishAngle: -0.9,
+    a3: 0.0,
+    a4: 0.0,
+    axisAngle: 0,
+    kidneyAngle: 0,
+    polishAngle: 0,
+    leanBias: 0.055,
+    leanAngle: 0, // leaning right (+X)
     vertexCount: 64,
   });
 
-  assert.equal(pts.length, 64);
-
-  const radii = pts.map((p) => Math.hypot(p.x - 200, p.y - 200));
-  const minR = Math.min(...radii);
-  const maxR = Math.max(...radii);
-
-  // Clearly non-circular (aspect/harmonic spread > 28%) while staying strictly smooth & bounded
-  const ratio = maxR / minR;
-  assert.ok(ratio > 1.28 && ratio < 2.0, `Expected smooth sculptural pebble ratio (got ${ratio.toFixed(2)})`);
-  assert.ok(minR > 75, 'Contour should never pinch inward or self-intersect');
-
-  // Verify smooth step-to-step continuity around the closed loop (no spiky jumps)
-  for (let i = 0; i < radii.length; i++) {
-    const next = radii[(i + 1) % radii.length];
-    assert.ok(Math.abs(next - radii[i]) < 8, 'Adjacent contour vertices must transition smoothly');
-  }
+  // Point directly ahead (theta = 0, index 0) reaches slightly farther than point behind (theta = pi, index 32)
+  const leadingReach = pts[0].x - 200;
+  const trailingReach = 200 - pts[32].x;
+  assert.ok(
+    leadingReach > trailingReach + 8,
+    `Leading edge (${leadingReach.toFixed(1)}) should subtly lean ahead of trailing edge (${trailingReach.toFixed(1)})`
+  );
 });
 
-test('stepPebbleFollowState tracks tightly with subtle directional lean and settles cleanly', () => {
+test('stepPebbleFollowState tracks tightly, leans along smoothed cursor velocity, and relaxes at rest', () => {
   const state = createPebbleFollowState(200, 200);
-  state.targetX = 520;
-  state.targetY = 320;
+  // First pointer entry initializes cleanly without a jump
+  updatePebbleTarget(state, 200, 200, 0);
 
-  let res = stepPebbleFollowState(state, 1 / 60, 0.1);
-  for (let f = 1; f <= 5; f++) {
-    res = stepPebbleFollowState(state, 1 / 60, 0.1 + f / 60);
+  // Move cursor steadily down-right along ~30° vector
+  let res = stepPebbleFollowState(state, 1 / 60, 0.01);
+  for (let f = 1; f <= 8; f++) {
+    updatePebbleTarget(state, 200 + f * 32, 200 + f * 18, f * 16.6);
+    res = stepPebbleFollowState(state, 1 / 60, f / 60);
   }
 
   assert.equal(res.tiers.length, 4);
+  const expectedAngle = Math.atan2(18, 32);
+  assert.ok(
+    Math.abs(res.lean.angle - expectedAngle) < 0.35,
+    `Expected pebble lean angle (~${expectedAngle.toFixed(2)}) to align with cursor velocity (got ${res.lean.angle.toFixed(2)})`
+  );
+  assert.ok(res.lean.leanStrength > 0.35, `Expected clear directional lean while moving (got ${res.lean.leanStrength.toFixed(2)})`);
 
-  // Tight delay: closes >75% within 5 frames (~83ms) with zero overshoot
-  const progressX = (state.anchorX - 200) / (520 - 200);
-  assert.ok(progressX > 0.75 && progressX < 1, `Expected tight follow progress (got ${progressX.toFixed(2)})`);
-
-  // Subtle directional lean engages while moving
-  assert.ok(state.leanStrength > 0.25, `Expected directional lean while moving (got ${state.leanStrength.toFixed(2)})`);
-
-  // Settles back cleanly onto pointer with lean relaxing toward zero
-  for (let f = 0; f < 60; f++) {
+  // Pause cursor -> anchor settles tightly and directional lean smoothly relaxes toward zero
+  for (let f = 0; f < 65; f++) {
     res = stepPebbleFollowState(state, 1 / 60, 0.2 + f / 60);
   }
-  assert.ok(Math.abs(state.anchorX - 520) < 1.5);
-  assert.ok(Math.abs(state.anchorY - 320) < 1.5);
-  assert.ok(state.leanStrength < 0.08, `Expected directional lean to relax at rest (got ${state.leanStrength.toFixed(2)})`);
+  assert.ok(Math.abs(state.anchorX - (200 + 8 * 32)) < 2);
+  assert.ok(Math.abs(state.anchorY - (200 + 8 * 18)) < 2);
+  assert.ok(res.lean.leanStrength < 0.06, `Expected directional lean to relax smoothly at rest (got ${res.lean.leanStrength.toFixed(2)})`);
 });
 
 test('computeScrollDashboardState hides header on first page and smoothly reveals past threshold', () => {

@@ -3,6 +3,7 @@ import {
   ContourPoint,
   createPebbleFollowState,
   stepPebbleFollowState,
+  updatePebbleTarget,
 } from '../utils/thermalEngine';
 
 // Compact display buffer (~0.35x viewport, capped at 520px wide) keeps vector
@@ -134,8 +135,10 @@ const LiquidThermalCursor = () => {
     const drawReducedMotionFrame = () => {
       sim.anchorX = sim.targetX;
       sim.anchorY = sim.targetY;
-      sim.vx = 0;
-      sim.vy = 0;
+      sim.lastTargetX = sim.targetX;
+      sim.lastTargetY = sim.targetY;
+      sim.smoothVx = 0;
+      sim.smoothVy = 0;
       sim.leanStrength = 0;
       visibilityAlpha = pointerInside ? 1 : 0;
       renderPebbleTiers(0, 1 / 60);
@@ -174,9 +177,7 @@ const LiquidThermalCursor = () => {
 
     const onPointerMove = (x: number, y: number) => {
       pointerInside = true;
-      sim.targetX = x;
-      sim.targetY = y;
-      sim.lastMoveTime = performance.now();
+      updatePebbleTarget(sim, x, y, performance.now());
       wake();
     };
 
