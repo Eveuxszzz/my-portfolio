@@ -1,15 +1,59 @@
 import { useEffect, useRef } from 'react';
 import {
-  OIL_FOUR_VALUES,
-  buildFourValueOilLUT,
-  createOilFollowState,
-  stepOilFollowState,
-  warpHeatmapField,
+  ContourPoint,
+  createPebbleFollowState,
+  stepPebbleFollowState,
 } from '../utils/thermalEngine';
 
-const BUFFER_SCALE = 0.22;
-const MIN_BUFFER_DIM = 96;
-const MAX_BUFFER_WIDTH = 320;
+// Compact display buffer (~0.35x viewport, capped at 520px wide) keeps vector
+// curves velvety-smooth while minimizing compositor fill cost across devices.
+const CANVAS_SCALE = 0.36;
+const MAX_CANVAS_WIDTH = 520;
+const MIN_CANVAS_DIM = 160;
+
+// Soft multi-shell feather profile replaces costly per-tier CPU Gaussian blurs
+// with ultra-fast native vector fills that look silky and consistent across browsers.
+const FEATHER_SHELLS = [
+  { expand: 1.13, alphaWeight: 0.10 },
+  { expand: 1.08, alphaWeight: 0.22 },
+  { expand: 1.04, alphaWeight: 0.42 },
+  { expand: 1.0, alphaWeight: 0.72 },
+] as const;
+
+const traceScaledSmoothContour = (
+  ctx: CanvasRenderingContext2D,
+  points: ContourPoint[],
+  centerX: number,
+  centerY: number,
+  expand: number,
+  scaleX: number,
+  scaleY: number
+) => {
+  const n = points.length;
+  if (n < 3) return;
+
+  const mapX = (px: number) => (centerX + (px - centerX) * expand) * scaleX;
+  const mapY = (py: number) => (centerY + (py - centerY) * expand) * scaleY;
+
+  const lastX = mapX(points[n - 1].x);
+  const lastY = mapY(points[n - 1].y);
+  const firstX = mapX(points[0].x);
+  const firstY = mapY(points[0].y);
+
+  ctx.beginPath();
+  ctx.moveTo((lastX + firstX) * 0.5, (lastY + firstY) * 0.5);
+
+  for (let i = 0; i < n; i++) {
+    const px = mapX(points[i].x);
+    const py = mapY(points[i].y);
+    const next = points[(i + 1) % n];
+    const nx = mapX(next.x);
+    const ny = mapY(next.y);
+    ctx.quadraticCurveTo(px, py, (px + nx) * 0.5, (py + ny) * 0.5);
+  }
+
+  ctx.closePath();
+};
 
 const LiquidThermalCursor = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -20,49 +64,33 @@ const LiquidThermalCursor = () => {
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
 
-    const fieldCanvas = document.createElement('canvas');
-    const fieldCtx = fieldCanvas.getContext('2d', { willReadFrequently: true });
-    if (!fieldCtx) return;
-
-    const oilCanvas = document.createElement('canvas');
-    const oilCtx = oilCanvas.getContext('2d');
-    if (!oilCtx) return;
-
-    const lut = buildFourValueOilLUT();
     const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     let prefersReducedMotion = reducedMotionQuery.matches;
 
     let viewportW = window.innerWidth;
     let viewportH = window.innerHeight;
-    let bufW = MIN_BUFFER_DIM;
-    let bufH = MIN_BUFFER_DIM;
-    let scaleX = BUFFER_SCALE;
-    let scaleY = BUFFER_SCALE;
-    let outputImageData: ImageData | null = null;
+    let bufW = MIN_CANVAS_DIM;
+    let bufH = MIN_CANVAS_DIM;
+    let scaleX = CANVAS_SCALE;
+    let scaleY = CANVAS_SCALE;
 
-    const sim = createOilFollowState(viewportW * 0.5, viewportH * 0.5);
+    const sim = createPebbleFollowState(viewportW * 0.5, viewportH * 0.5);
 
     const resize = () => {
       viewportW = Math.max(1, window.innerWidth);
       viewportH = Math.max(1, window.innerHeight);
 
-      const rawW = Math.round(viewportW * BUFFER_SCALE);
-      bufW = Math.max(MIN_BUFFER_DIM, Math.min(MAX_BUFFER_WIDTH, rawW));
+      const rawW = Math.round(viewportW * CANVAS_SCALE);
+      bufW = Math.max(MIN_CANVAS_DIM, Math.min(MAX_CANVAS_WIDTH, rawW));
       bufH = Math.max(
-        MIN_BUFFER_DIM,
+        MIN_CANVAS_DIM,
         Math.round((bufW * viewportH) / Math.max(1, viewportW))
       );
 
       canvas.width = bufW;
       canvas.height = bufH;
-      fieldCanvas.width = bufW;
-      fieldCanvas.height = bufH;
-      oilCanvas.width = bufW;
-      oilCanvas.height = bufH;
-
       scaleX = bufW / viewportW;
       scaleY = bufH / viewportH;
-      outputImageData = oilCtx.createImageData(bufW, bufH);
     };
 
     resize();
@@ -73,30 +101,44 @@ const LiquidThermalCursor = () => {
     let pointerInside = true;
     let visibilityAlpha = 1;
 
-    const drawReducedMotionFrame = () => {
-      ctx.clearRect(0, 0, bufW, bufH);
-      const cx = sim.targetX * scaleX;
-      const cy = sim.targetY * scaleY;
-      const maxR = 160 * scaleX;
-      const shapes = [
-        { rx: maxR * 1.15, ry: maxR * 0.85, ox: 0, oy: 0, rot: -0.25 },
-        { rx: maxR * 0.84, ry: maxR * 0.66, ox: -5, oy: 2, rot: -0.18 },
-        { rx: maxR * 0.56, ry: maxR * 0.44, ox: -8, oy: -2, rot: -0.1 },
-        { rx: maxR * 0.28, ry: maxR * 0.22, ox: -6, oy: -3, rot: 0.05 },
-      ];
+    const renderPebbleTiers = (nowSec: number, dt: number) => {
+      const { tiers, kineticEnergy } = stepPebbleFollowState(sim, dt, nowSec, 56);
 
-      for (let i = 0; i < OIL_FOUR_VALUES.length; i++) {
-        const v = OIL_FOUR_VALUES[i];
-        const s = shapes[i];
-        ctx.save();
-        ctx.translate(cx + s.ox, cy + s.oy);
-        ctx.rotate(s.rot);
-        ctx.fillStyle = `rgba(${v.r}, ${v.g}, ${v.b}, ${(v.a / 255).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.ellipse(0, 0, s.rx, s.ry, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+      const targetVis = pointerInside ? 1 : 0;
+      visibilityAlpha += (targetVis - visibilityAlpha) * Math.min(1, 0.16 * (dt * 60));
+
+      ctx.clearRect(0, 0, bufW, bufH);
+      if (visibilityAlpha <= 0.01) {
+        return kineticEnergy;
       }
+
+      for (let i = 0; i < tiers.length; i++) {
+        const { spec, points, centerX, centerY } = tiers[i];
+        // Outer tiers feather slightly wider than the inner hotspot for natural heatmap depth
+        const tierFeatherBoost = 1 + (tiers.length - 1 - i) * 0.025;
+
+        for (let s = 0; s < FEATHER_SHELLS.length; s++) {
+          const shell = FEATHER_SHELLS[s];
+          const expand = 1 + (shell.expand - 1) * tierFeatherBoost;
+          const shellAlpha = spec.alpha * shell.alphaWeight * visibilityAlpha;
+
+          ctx.fillStyle = `rgba(${spec.r}, ${spec.g}, ${spec.b}, ${shellAlpha.toFixed(3)})`;
+          traceScaledSmoothContour(ctx, points, centerX, centerY, expand, scaleX, scaleY);
+          ctx.fill();
+        }
+      }
+
+      return kineticEnergy;
+    };
+
+    const drawReducedMotionFrame = () => {
+      sim.anchorX = sim.targetX;
+      sim.anchorY = sim.targetY;
+      sim.vx = 0;
+      sim.vy = 0;
+      sim.leanStrength = 0;
+      visibilityAlpha = pointerInside ? 1 : 0;
+      renderPebbleTiers(0, 1 / 60);
     };
 
     const tick = (now: number) => {
@@ -109,80 +151,10 @@ const LiquidThermalCursor = () => {
         return;
       }
 
-      const nowSec = now * 0.001;
-      const { samples, kineticEnergy } = stepOilFollowState(sim, dt, nowSec);
-
-      const targetVis = pointerInside ? 1 : 0;
-      visibilityAlpha += (targetVis - visibilityAlpha) * Math.min(1, 0.16 * (dt * 60));
-
-      fieldCtx.clearRect(0, 0, bufW, bufH);
-
-      let minX = bufW;
-      let minY = bufH;
-      let maxX = 0;
-      let maxY = 0;
-
-      if (visibilityAlpha > 0.01) {
-        fieldCtx.globalCompositeOperation = 'lighter';
-
-        for (let i = 0; i < samples.length; i++) {
-          const s = samples[i];
-          const cx = s.x * scaleX;
-          const cy = s.y * scaleY;
-          const rx = Math.max(6, s.radiusX * scaleX);
-          const ry = Math.max(6, s.radiusY * scaleY);
-          const maxExtent = Math.max(rx, ry);
-
-          minX = Math.min(minX, cx - maxExtent);
-          minY = Math.min(minY, cy - maxExtent);
-          maxX = Math.max(maxX, cx + maxExtent);
-          maxY = Math.max(maxY, cy + maxExtent);
-
-          fieldCtx.save();
-          fieldCtx.translate(cx, cy);
-          fieldCtx.rotate(s.angle);
-          fieldCtx.scale(1, ry / rx);
-
-          const alpha = Math.min(0.62, s.weight * visibilityAlpha);
-          const grad = fieldCtx.createRadialGradient(0, 0, 0, 0, 0, rx);
-          grad.addColorStop(0, `rgba(255, 255, 255, ${alpha.toFixed(3)})`);
-          grad.addColorStop(0.28, `rgba(255, 255, 255, ${(alpha * 0.72).toFixed(3)})`);
-          grad.addColorStop(0.58, `rgba(255, 255, 255, ${(alpha * 0.34).toFixed(3)})`);
-          grad.addColorStop(0.84, `rgba(255, 255, 255, ${(alpha * 0.1).toFixed(3)})`);
-          grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-
-          fieldCtx.fillStyle = grad;
-          fieldCtx.beginPath();
-          fieldCtx.arc(0, 0, rx, 0, Math.PI * 2);
-          fieldCtx.fill();
-          fieldCtx.restore();
-        }
-      }
-
-      // Warp the merged asymmetric metaball field and map through the 4-value heatmap LUT
-      if (outputImageData) {
-        const warpMargin = Math.ceil(bufW * 0.055) + 4;
-        const fieldData = fieldCtx.getImageData(0, 0, bufW, bufH).data;
-
-        warpHeatmapField(fieldData, outputImageData.data, bufW, bufH, lut, nowSec, {
-          minX: minX - warpMargin,
-          minY: minY - warpMargin,
-          maxX: maxX + warpMargin,
-          maxY: maxY + warpMargin,
-        });
-
-        oilCtx.putImageData(outputImageData, 0, 0);
-
-        ctx.clearRect(0, 0, bufW, bufH);
-        ctx.save();
-        ctx.filter = 'blur(1.4px)';
-        ctx.drawImage(oilCanvas, 0, 0);
-        ctx.restore();
-      }
-
+      const kineticEnergy = renderPebbleTiers(now * 0.001, dt);
       const idleMs = now - sim.lastMoveTime;
       const shouldKeepRunning = pointerInside
-        ? kineticEnergy > 0.25 || idleMs < 2400
+        ? kineticEnergy > 0.15 || idleMs < 3200
         : visibilityAlpha > 0.015;
 
       if (shouldKeepRunning) {
