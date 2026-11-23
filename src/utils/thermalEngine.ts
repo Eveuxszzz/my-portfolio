@@ -22,6 +22,7 @@ export interface SculptedTierGeometry {
   points: ContourPoint[];
   centerX: number;
   centerY: number;
+  alphaMultiplier: number;
 }
 
 export interface VelocityLeanMetrics {
@@ -30,6 +31,28 @@ export interface VelocityLeanMetrics {
   leanStrength: number;
   dirX: number;
   dirY: number;
+}
+
+export interface PebblePulseRipple {
+  originX: number;
+  originY: number;
+  ageSeconds: number;
+  durationSeconds: number;
+  axisAngle: number;
+  kidneyAngle: number;
+  polishAngle: number;
+  a2: number;
+  a3: number;
+  a4: number;
+}
+
+export interface RenderedHeatRipple {
+  points: ContourPoint[];
+  centerX: number;
+  centerY: number;
+  progress: number;
+  alpha: number;
+  strokeWidthPx: number;
 }
 
 export interface PebbleFollowState {
@@ -46,10 +69,20 @@ export interface PebbleFollowState {
   leanAngle: number;
   leanStrength: number;
   lastMoveTime: number;
+  /** Last evaluated organic contour orientations for seamless ripple emission */
+  lastAxisAngle: number;
+  lastKidneyAngle: number;
+  lastPolishAngle: number;
+  /** Click thermal pulse age (>= PULSE_DURATION_SECONDS when inactive) */
+  pulseAgeSeconds: number;
+  /** Active faint heat ring ripples radiating from clicks */
+  ripples: PebblePulseRipple[];
 }
 
 export interface StepPebbleResult {
   tiers: SculptedTierGeometry[];
+  ripples: RenderedHeatRipple[];
+  pulseIntensity: number;
   kineticEnergy: number;
   lean: VelocityLeanMetrics;
 }
@@ -60,6 +93,10 @@ export interface ScrollDashboardState {
   isHeaderVisible: boolean;
   activeSectionIndex: number;
 }
+
+export const PULSE_DURATION_SECONDS = 0.52;
+export const RIPPLE_DURATION_SECONDS = 0.78;
+export const MAX_ACTIVE_RIPPLES = 4;
 
 export const HEADER_REVEAL_START = 0.18;
 export const HEADER_REVEAL_END = 0.58;
@@ -186,6 +223,44 @@ export function computeVelocityLean(
 }
 
 /**
+ * Smooth C2-continuous bell envelope for the click thermal pulse:
+ * brisk organic swell followed by calm viscous return to the breathing state.
+ */
+export function evaluatePulseEnvelope(progress: number): number {
+  if (progress <= 0 || progress >= 1) return 0;
+  const rise = smootherstep(Math.min(1, progress / 0.24));
+  const fall = 1 - smootherstep(Math.max(0, (progress - 0.18) / 0.82));
+  return clamp01(rise * fall);
+}
+
+/**
+ * Evaluates radius, opacity, feathered ring width, and harmonic relaxation
+ * for a single temporary heat ring ripple over its normalized lifetime [0, 1].
+ */
+export function evaluateHeatRippleVisuals(progress: number): {
+  radius: number;
+  alpha: number;
+  strokeWidthPx: number;
+  harmonicRelax: number;
+} {
+  const p = clamp01(progress);
+  const eased = 1 - Math.pow(1 - p, 2.4);
+  const radius = lerp(148, 278, eased);
+  const strokeWidthPx = lerp(18, 30, eased);
+  const harmonicRelax = lerp(1.0, 0.56, eased);
+
+  if (progress <= 0 || progress >= 1) {
+    return { radius, alpha: 0, strokeWidthPx, harmonicRelax };
+  }
+
+  const fadeIn = smootherstep(Math.min(1, p / 0.10));
+  const fadeOut = Math.pow(1 - p, 1.95);
+  const alpha = 0.22 * fadeIn * fadeOut;
+
+  return { radius, alpha, strokeWidthPx, harmonicRelax };
+}
+
+/**
  * Initializes the tight-follow sculptural pebble heatmap state.
  */
 export function createPebbleFollowState(
@@ -205,6 +280,11 @@ export function createPebbleFollowState(
     leanAngle: -0.35,
     leanStrength: 0,
     lastMoveTime: 0,
+    lastAxisAngle: -0.35,
+    lastKidneyAngle: 0.75,
+    lastPolishAngle: -0.9,
+    pulseAgeSeconds: PULSE_DURATION_SECONDS,
+    ripples: [],
   };
 }
 
@@ -226,6 +306,40 @@ export function updatePebbleTarget(
   state.targetX = x;
   state.targetY = y;
   state.lastMoveTime = nowMs;
+}
+
+/**
+ * Triggers a brief thermal swell on the pebble and emits a faint, temporary
+ * organic heat ring ripple that radiates outward from the pebble silhouette.
+ */
+export function triggerPebblePulse(
+  state: PebbleFollowState,
+  clickX?: number,
+  clickY?: number
+): void {
+  state.pulseAgeSeconds = 0;
+
+  const originX =
+    clickX !== undefined ? lerp(state.anchorX, clickX, 0.35) : state.anchorX;
+  const originY =
+    clickY !== undefined ? lerp(state.anchorY, clickY, 0.35) : state.anchorY;
+
+  state.ripples.push({
+    originX,
+    originY,
+    ageSeconds: 0,
+    durationSeconds: RIPPLE_DURATION_SECONDS,
+    axisAngle: state.lastAxisAngle,
+    kidneyAngle: state.lastKidneyAngle,
+    polishAngle: state.lastPolishAngle,
+    a2: Math.min(0.22, 0.145 + state.leanStrength * 0.045),
+    a3: 0.075,
+    a4: 0.014,
+  });
+
+  if (state.ripples.length > MAX_ACTIVE_RIPPLES) {
+    state.ripples.splice(0, state.ripples.length - MAX_ACTIVE_RIPPLES);
+  }
 }
 
 /**
@@ -274,9 +388,9 @@ export function samplePebbleContour(
 }
 
 /**
- * Advances the tight viscous anchor and mathematically smoothed cursor velocity
- * vector (continuous-time exponential low-pass filter + tanh/smootherstep lean
- * response) to produce all 4 nested monochrome topographic contours.
+ * Advances the tight viscous anchor, mathematically smoothed cursor velocity
+ * vector, click thermal pulse, and faint radiating heat ring ripples to produce
+ * all 4 nested monochrome topographic contours plus active rings.
  */
 export function stepPebbleFollowState(
   state: PebbleFollowState,
@@ -327,11 +441,22 @@ export function stepPebbleFollowState(
     state.leanAngle = lerpAngle(state.leanAngle, lean.angle, angleAlpha);
   }
 
-  // 4. Slow calm breathing morph combined with subtle directional lean along the smoothed velocity vector
+  // 4. Advance click thermal pulse envelope
+  if (state.pulseAgeSeconds < PULSE_DURATION_SECONDS) {
+    state.pulseAgeSeconds = Math.min(PULSE_DURATION_SECONDS, state.pulseAgeSeconds + dt);
+  }
+  const pulseProgress = state.pulseAgeSeconds / PULSE_DURATION_SECONDS;
+  const pulseIntensity = evaluatePulseEnvelope(pulseProgress);
+
+  // 5. Slow calm breathing morph combined with subtle directional lean along the smoothed velocity vector
   const restAxis = -0.35 + Math.sin(nowSeconds * 0.34) * 0.28;
   const axisAngle = lerpAngle(restAxis, state.leanAngle, state.leanStrength * 0.78);
   const kidneyBase = 0.75 + Math.sin(nowSeconds * 0.26 + 1.1) * 0.38;
   const polishBase = -0.9 + Math.cos(nowSeconds * 0.21) * 0.45;
+
+  state.lastAxisAngle = axisAngle;
+  state.lastKidneyAngle = kidneyBase;
+  state.lastPolishAngle = polishBase;
 
   const breathScale = 1 + Math.sin(nowSeconds * 0.85) * 0.028;
   const baseA2 = 0.15 + Math.sin(nowSeconds * 0.62) * 0.018 + state.leanStrength * 0.085;
@@ -358,12 +483,22 @@ export function stepPebbleFollowState(
       eccentricSin * spec.eccentricOffset +
       leanSin * forwardShiftMax * tierRatio;
 
+    // Inner core pulses slightly ahead of outer ash so heat appears to radiate outward
+    const tierDelay = (PEBBLE_CONTOUR_TIERS.length - 1 - idx) * 0.075;
+    const staggeredProgress =
+      pulseProgress > tierDelay
+        ? (pulseProgress - tierDelay) / Math.max(0.01, 1 - tierDelay)
+        : 0;
+    const tierPulse = evaluatePulseEnvelope(staggeredProgress);
+    const tierRadiusScale = breathScale * (1 + tierPulse * (0.085 + tierRatio * 0.055));
+    const alphaMultiplier = 1 + tierPulse * 0.18;
+
     const a2 = Math.min(0.25, baseA2 * spec.a2Scale);
     const a3 = Math.min(0.112, baseA3 * spec.a3Scale);
     const a4 = Math.min(0.025, baseA4);
     const leanBias = Math.min(0.065, baseLeanBias * (0.7 + tierRatio * 0.5));
 
-    const points = samplePebbleContour(cx, cy, spec.radius * breathScale, {
+    const points = samplePebbleContour(cx, cy, spec.radius * tierRadiusScale, {
       a2,
       a3,
       a4,
@@ -375,14 +510,62 @@ export function stepPebbleFollowState(
       vertexCount,
     });
 
-    return { spec, points, centerX: cx, centerY: cy };
+    return { spec, points, centerX: cx, centerY: cy, alphaMultiplier };
   });
 
+  // 6. Advance and evaluate faint temporary heat ring ripples
+  const activeRipples: PebblePulseRipple[] = [];
+  const renderedRipples: RenderedHeatRipple[] = [];
+
+  for (let i = 0; i < state.ripples.length; i++) {
+    const ripple = state.ripples[i];
+    ripple.ageSeconds += dt;
+    if (ripple.ageSeconds >= ripple.durationSeconds) {
+      continue;
+    }
+
+    activeRipples.push(ripple);
+    const progress = ripple.ageSeconds / ripple.durationSeconds;
+    const visuals = evaluateHeatRippleVisuals(progress);
+
+    if (visuals.alpha > 0.002) {
+      const points = samplePebbleContour(
+        ripple.originX,
+        ripple.originY,
+        visuals.radius,
+        {
+          a2: ripple.a2 * visuals.harmonicRelax,
+          a3: ripple.a3 * visuals.harmonicRelax,
+          a4: ripple.a4 * visuals.harmonicRelax,
+          axisAngle: ripple.axisAngle,
+          kidneyAngle: ripple.kidneyAngle,
+          polishAngle: ripple.polishAngle,
+          vertexCount,
+        }
+      );
+
+      renderedRipples.push({
+        points,
+        centerX: ripple.originX,
+        centerY: ripple.originY,
+        progress,
+        alpha: visuals.alpha,
+        strokeWidthPx: visuals.strokeWidthPx,
+      });
+    }
+  }
+
+  state.ripples = activeRipples;
+
   const remainingDist = Math.hypot(state.targetX - state.anchorX, state.targetY - state.anchorY);
-  const kineticEnergy = lean.speed / 60 + remainingDist * 0.25 + state.leanStrength * 3;
+  const pulseActivity = pulseIntensity * 2.5 + activeRipples.length * 1.5;
+  const kineticEnergy =
+    lean.speed / 60 + remainingDist * 0.25 + state.leanStrength * 3 + pulseActivity;
 
   return {
     tiers,
+    ripples: renderedRipples,
+    pulseIntensity,
     kineticEnergy,
     lean: {
       speed: lean.speed,

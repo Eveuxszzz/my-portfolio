@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react';
 import {
   ContourPoint,
+  PULSE_DURATION_SECONDS,
   createPebbleFollowState,
   stepPebbleFollowState,
+  triggerPebblePulse,
   updatePebbleTarget,
 } from '../utils/thermalEngine';
 
@@ -19,6 +21,15 @@ const FEATHER_SHELLS = [
   { expand: 1.08, alphaWeight: 0.22 },
   { expand: 1.04, alphaWeight: 0.42 },
   { expand: 1.0, alphaWeight: 0.72 },
+] as const;
+
+// Multi-pass soft stroke profile for the faint, temporary heat ring ripple
+// (avoids CPU shadowBlur / filter stalls while producing velvety thermal falloff).
+const RIPPLE_FEATHER_PASSES = [
+  { widthScale: 2.1, alphaWeight: 0.12 },
+  { widthScale: 1.45, alphaWeight: 0.22 },
+  { widthScale: 0.95, alphaWeight: 0.34 },
+  { widthScale: 0.55, alphaWeight: 0.44 },
 ] as const;
 
 const traceScaledSmoothContour = (
@@ -103,7 +114,7 @@ const LiquidThermalCursor = () => {
     let visibilityAlpha = 1;
 
     const renderPebbleTiers = (nowSec: number, dt: number) => {
-      const { tiers, kineticEnergy } = stepPebbleFollowState(sim, dt, nowSec, 56);
+      const { tiers, ripples, kineticEnergy } = stepPebbleFollowState(sim, dt, nowSec, 56);
 
       const targetVis = pointerInside ? 1 : 0;
       visibilityAlpha += (targetVis - visibilityAlpha) * Math.min(1, 0.16 * (dt * 60));
@@ -113,15 +124,50 @@ const LiquidThermalCursor = () => {
         return kineticEnergy;
       }
 
+      // Draw faint radiating heat ring ripples softly around the pebble silhouette
+      if (ripples.length > 0) {
+        const avgScale = (scaleX + scaleY) * 0.5;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+
+        for (let r = 0; r < ripples.length; r++) {
+          const ripple = ripples[r];
+          const baseAlpha = ripple.alpha * visibilityAlpha;
+          if (baseAlpha <= 0.002) continue;
+
+          traceScaledSmoothContour(
+            ctx,
+            ripple.points,
+            ripple.centerX,
+            ripple.centerY,
+            1,
+            scaleX,
+            scaleY
+          );
+
+          for (let p = 0; p < RIPPLE_FEATHER_PASSES.length; p++) {
+            const pass = RIPPLE_FEATHER_PASSES[p];
+            const passAlpha = baseAlpha * pass.alphaWeight;
+            ctx.lineWidth = Math.max(0.75, ripple.strokeWidthPx * pass.widthScale * avgScale);
+            ctx.strokeStyle = `rgba(206, 210, 218, ${passAlpha.toFixed(3)})`;
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Draw the 4-step monochrome topographic pebble contours
       for (let i = 0; i < tiers.length; i++) {
-        const { spec, points, centerX, centerY } = tiers[i];
+        const { spec, points, centerX, centerY, alphaMultiplier } = tiers[i];
         // Outer tiers feather slightly wider than the inner hotspot for natural heatmap depth
         const tierFeatherBoost = 1 + (tiers.length - 1 - i) * 0.025;
 
         for (let s = 0; s < FEATHER_SHELLS.length; s++) {
           const shell = FEATHER_SHELLS[s];
           const expand = 1 + (shell.expand - 1) * tierFeatherBoost;
-          const shellAlpha = spec.alpha * shell.alphaWeight * visibilityAlpha;
+          const shellAlpha = Math.min(
+            0.95,
+            spec.alpha * alphaMultiplier * shell.alphaWeight * visibilityAlpha
+          );
 
           ctx.fillStyle = `rgba(${spec.r}, ${spec.g}, ${spec.b}, ${shellAlpha.toFixed(3)})`;
           traceScaledSmoothContour(ctx, points, centerX, centerY, expand, scaleX, scaleY);
@@ -140,6 +186,8 @@ const LiquidThermalCursor = () => {
       sim.smoothVx = 0;
       sim.smoothVy = 0;
       sim.leanStrength = 0;
+      sim.pulseAgeSeconds = PULSE_DURATION_SECONDS;
+      sim.ripples = [];
       visibilityAlpha = pointerInside ? 1 : 0;
       renderPebbleTiers(0, 1 / 60);
     };
@@ -181,6 +229,16 @@ const LiquidThermalCursor = () => {
       wake();
     };
 
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      pointerInside = true;
+      updatePebbleTarget(sim, e.clientX, e.clientY, performance.now());
+      if (!prefersReducedMotion) {
+        triggerPebblePulse(sim, e.clientX, e.clientY);
+      }
+      wake();
+    };
+
     const onMouseMove = (e: MouseEvent) => onPointerMove(e.clientX, e.clientY);
     const onTouchMove = (e: TouchEvent) => {
       const t = e.touches[0];
@@ -198,6 +256,7 @@ const LiquidThermalCursor = () => {
 
     window.addEventListener('mousemove', onMouseMove, { passive: true });
     window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('pointerdown', onPointerDown, { passive: true });
     window.addEventListener('resize', resize, { passive: true });
     document.addEventListener('mouseleave', onPointerLeave);
     reducedMotionQuery.addEventListener('change', onReducedMotionChange);
@@ -209,6 +268,7 @@ const LiquidThermalCursor = () => {
       cancelAnimationFrame(rafId);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('resize', resize);
       document.removeEventListener('mouseleave', onPointerLeave);
       reducedMotionQuery.removeEventListener('change', onReducedMotionChange);

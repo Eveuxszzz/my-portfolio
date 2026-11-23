@@ -2,14 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HEADER_REVEAL_THRESHOLD,
+  MAX_ACTIVE_RIPPLES,
   PEBBLE_CONTOUR_TIERS,
   computeScrollDashboardState,
   computeVelocityLean,
   createPebbleFollowState,
+  evaluateHeatRippleVisuals,
+  evaluatePulseEnvelope,
   exponentialSmoothingFactor,
   samplePebbleContour,
   smootherstep,
   stepPebbleFollowState,
+  triggerPebblePulse,
   updatePebbleTarget,
 } from './thermalEngine';
 
@@ -128,4 +132,53 @@ test('computeScrollDashboardState hides header on first page and smoothly reveal
     isHeaderVisible: true,
     activeSectionIndex: 1,
   });
+});
+
+test('triggerPebblePulse swells the pebble, radiates a temporary organic heat ring ripple, and returns to breathing', () => {
+  // Pure pulse envelope invariants
+  assert.equal(evaluatePulseEnvelope(0), 0);
+  assert.equal(evaluatePulseEnvelope(1), 0);
+  assert.ok(evaluatePulseEnvelope(0.22) > 0.85, 'Pulse peaks smoothly soon after click');
+  assert.ok(evaluatePulseEnvelope(0.7) < evaluatePulseEnvelope(0.22), 'Pulse decays gently back to baseline');
+
+  // Pure heat ring ripple visual progression
+  const early = evaluateHeatRippleVisuals(0.15);
+  const mid = evaluateHeatRippleVisuals(0.5);
+  const end = evaluateHeatRippleVisuals(1.0);
+  assert.ok(early.alpha > 0 && early.alpha <= 0.28, 'Heat ring starts faint and atmospheric');
+  assert.ok(mid.radius > early.radius, 'Heat ring radiates outward over time');
+  assert.ok(mid.alpha < early.alpha, 'Heat ring fades gently as it expands');
+  assert.equal(end.alpha, 0, 'Heat ring completely vanishes at end of lifetime');
+
+  // Integrated state lifecycle
+  const state = createPebbleFollowState(500, 400);
+  const baseline = stepPebbleFollowState(state, 1 / 60, 1.0);
+  assert.equal(baseline.ripples.length, 0);
+  assert.equal(baseline.pulseIntensity, 0);
+
+  triggerPebblePulse(state, 510, 405);
+  // Advance ~120ms (7 frames) to catch active pulse swell + expanding ripple
+  let active = baseline;
+  for (let i = 0; i < 7; i++) {
+    active = stepPebbleFollowState(state, 1 / 60, 1.0 + (i + 1) / 60);
+  }
+  assert.ok(active.pulseIntensity > 0.5, `Expected active click pulse swell (got ${active.pulseIntensity.toFixed(2)})`);
+  assert.equal(active.ripples.length, 1);
+  assert.ok(active.ripples[0].alpha > 0.05 && active.ripples[0].alpha <= 0.28);
+  assert.ok(active.tiers[3].alphaMultiplier > 1.05, 'Inner thermal core briefly brightens during pulse');
+
+  // Rapid clicks respect MAX_ACTIVE_RIPPLES cap
+  for (let c = 0; c < MAX_ACTIVE_RIPPLES + 3; c++) {
+    triggerPebblePulse(state, 500, 400);
+  }
+  assert.equal(state.ripples.length, MAX_ACTIVE_RIPPLES);
+
+  // After 1.1s (66 frames), both pulse and all heat ripples expire cleanly back to breathing state
+  let settled = active;
+  for (let i = 0; i < 66; i++) {
+    settled = stepPebbleFollowState(state, 1 / 60, 1.2 + i / 60);
+  }
+  assert.equal(settled.pulseIntensity, 0);
+  assert.equal(settled.ripples.length, 0);
+  assert.equal(settled.tiers[3].alphaMultiplier, 1);
 });
